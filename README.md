@@ -2,7 +2,14 @@
 
 An intelligent, AI-powered platform designed to streamline the loan application process. This application assists users by checking loan eligibility, analyzing missing documents, and providing a conversational interface for all loan-related queries using advanced RAG (Retrieval-Augmented Generation) and Gemini AI.
 
-![Project Screenshot](./screenshot.png)
+![Project Screenshot 1](./assets/screenshot1.png)
+![Project Screenshot 2](./assets/screenshot2.png)
+![Project Screenshot 3](./assets/screenshot3.png)
+![Project Screenshot 4](./assets/screenshot4.png)
+![Project Screenshot 5](./assets/screenshot5.png)
+![Project Screenshot 6](./assets/screenshot6.png)
+![Project Screenshot 7](./assets/screenshot7.png)
+![Project Screenshot 8](./assets/screenshot8.png)
 
 ## 🌟 Features
 
