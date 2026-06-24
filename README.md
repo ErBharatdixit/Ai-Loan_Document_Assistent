@@ -2,6 +2,8 @@
 
 An intelligent, AI-powered platform designed to streamline the loan application process. This application assists users by checking loan eligibility, analyzing missing documents, and providing a conversational interface for all loan-related queries using advanced RAG (Retrieval-Augmented Generation) and Gemini AI.
 
+### 🔗 [Live Demo](https://ai-loan-document-assistent-1.onrender.com)
+
 ![Project Screenshot 1](./assets/screenshot1.png)
 ![Project Screenshot 2](./assets/screenshot2.png)
 ![Project Screenshot 3](./assets/screenshot3.png)
