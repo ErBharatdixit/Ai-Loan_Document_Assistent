@@ -1,7 +1,8 @@
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { withRetry } from './utils/withRetry.js';
 
 // Helper to initialize Gemini
-function getModel(apiKey, modelName = 'gemini-2.5-flash', jsonSchema = null) {
+function getModel(apiKey, modelName = 'gemini-2.0-flash', jsonSchema = null) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const config = {};
   
@@ -15,8 +16,62 @@ function getModel(apiKey, modelName = 'gemini-2.5-flash', jsonSchema = null) {
 
 export const geminiService = {
   // RAG Chat
-  async chatWithContext(query, contextChunks, history = [], language = 'English', apiKey) {
-    const model = getModel(apiKey, 'gemini-2.5-flash');
+  async chatWithContext(query, contextChunks, history = [], language = 'English', apiKey, dbToolsContext = null) {
+    const tools = [
+      {
+        functionDeclarations: [
+          {
+            name: "check_eligibility",
+            description: "Check if the user is eligible for government schemes.",
+            parameters: {
+              type: SchemaType.OBJECT,
+              properties: {
+                age: { type: SchemaType.NUMBER, description: "User age" },
+                education: { type: SchemaType.STRING, description: "Education level" },
+                businessType: { type: SchemaType.STRING, description: "Type of business" },
+                investmentAmount: { type: SchemaType.NUMBER, description: "Investment amount" }
+              },
+              required: ["age", "education", "businessType", "investmentAmount"]
+            }
+          },
+          {
+            name: "detect_missing_docs",
+            description: "Check which documents are missing for a specific scheme.",
+            parameters: {
+              type: SchemaType.OBJECT,
+              properties: {
+                schemeName: { type: SchemaType.STRING, description: "Name of the government scheme" }
+              },
+              required: ["schemeName"]
+            }
+          },
+          {
+            name: "compare_loans",
+            description: "Compares multiple loan offers to extract parameters and calculate the best recommendation.",
+            parameters: {
+              type: SchemaType.OBJECT,
+              properties: {
+                loansList: {
+                  type: SchemaType.ARRAY,
+                  items: {
+                    type: SchemaType.OBJECT,
+                    properties: {
+                      bankName: { type: SchemaType.STRING },
+                      interestRate: { type: SchemaType.STRING },
+                      processingFee: { type: SchemaType.STRING },
+                      maxLoanAmount: { type: SchemaType.STRING },
+                      repaymentPeriod: { type: SchemaType.STRING }
+                    }
+                  },
+                  description: "List of loan offers to compare"
+                }
+              },
+              required: ["loansList"]
+            }
+          }
+        ]
+      }
+    ];
 
     const contextText = contextChunks.map((chunk, i) => `[Context ${i+1}]:\n${chunk.text}\n`).join('\n');
     
@@ -26,36 +81,74 @@ You help small business owners, students, and families understand documents.
 Provide your response in ${language}. If the language is Hindi, translate terms accurately and use clear Hindi text.
 
 Rules:
-1. Answer the user's question ONLY using the provided Context.
-2. If the answer cannot be found in the context, state clearly that the context does not contain enough information, but offer a general guide if possible.
-3. Be precise, polite, and professional.
-4. When referencing information, cite the context index (e.g. [Context 1]) where appropriate.
-    `;
+1. Answer the user's question using the provided Context or Tools.
+2. If the user asks about eligibility, use the 'check_eligibility' tool. Ask for missing profile info if needed (age, education, business type, investment amount).
+3. If the user asks about missing documents, use the 'detect_missing_docs' tool. You must pass a clear schemeName like "Pradhan Mantri Mudra Yojana (PMMY)".
+4. Be precise, polite, and professional.
+5. When referencing context information, cite the context index (e.g. [Context 1]).
 
-    // Format history for the prompt
-    let chatHistoryPrompt = '';
-    if (history.length > 0) {
-      chatHistoryPrompt = 'Conversation history:\n' + history.map(h => `User: ${h.message}\nAssistant: ${h.response}`).join('\n') + '\n\n';
-    }
-
-    const prompt = `
-${chatHistoryPrompt}
-Context Information:
+Available Context:
 ${contextText}
-
-User's Question:
-${query}
-
-Assistant Response (in ${language}):
     `;
 
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      systemInstruction: systemInstruction
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-2.0-flash',
+      systemInstruction: {
+        role: "system",
+        parts: [{ text: systemInstruction }]
+      }
     });
 
-    const response = await result.response;
-    return response.text();
+    // Format history for startChat
+    const formattedHistory = [];
+    for (const h of history) {
+      formattedHistory.push({ role: 'user', parts: [{ text: h.message }] });
+      formattedHistory.push({ role: 'model', parts: [{ text: h.response }] });
+    }
+
+    const chat = model.startChat({
+      history: formattedHistory,
+      tools: tools
+    });
+
+    let result = await withRetry(() => chat.sendMessage(query));
+
+    // Check if the model decided to call a function
+    if (result.response.functionCalls && result.response.functionCalls.length > 0) {
+      const call = result.response.functionCalls[0];
+      let toolResult = {};
+      
+      try {
+        if (call.name === 'check_eligibility') {
+          const profile = call.args;
+          const schemesTextList = dbToolsContext?.schemes || [];
+          toolResult = await this.checkEligibility(profile, schemesTextList, apiKey);
+        } 
+        else if (call.name === 'detect_missing_docs') {
+          const schemeName = call.args.schemeName;
+          const requiredDocs = dbToolsContext?.schemeDocsMap?.[schemeName] || [];
+          const uploadedDocs = dbToolsContext?.uploadedDocs || [];
+          toolResult = await this.detectMissingDocuments(schemeName, requiredDocs, uploadedDocs, apiKey);
+        }
+        else if (call.name === 'compare_loans') {
+          const loansList = call.args.loansList || [];
+          toolResult = await this.compareLoans(loansList, apiKey);
+        }
+      } catch (err) {
+        toolResult = { error: err.message };
+      }
+
+      // Send the tool response back to the model
+      result = await withRetry(() => chat.sendMessage([{
+        functionResponse: {
+          name: call.name,
+          response: toolResult
+        }
+      }]));
+    }
+
+    return result.response.text();
   },
 
   // Document Summary (Structured Output)
@@ -85,10 +178,10 @@ Assistant Response (in ${language}):
       required: ["shortSummary", "detailedSummary", "highlights", "actionItems"]
     };
 
-    const model = getModel(apiKey, 'gemini-2.5-flash', summarySchema);
+    const model = getModel(apiKey, 'gemini-2.0-flash', summarySchema);
     const prompt = `Analyze the following document and output a structured summary in JSON format matching the schema:\n\n${documentText}`;
     
-    const result = await model.generateContent(prompt);
+    const result = await withRetry(() => model.generateContent(prompt));
     const response = await result.response;
     return JSON.parse(response.text());
   },
@@ -127,7 +220,7 @@ Assistant Response (in ${language}):
       required: ["schemes"]
     };
 
-    const model = getModel(apiKey, 'gemini-2.5-flash', eligibilitySchema);
+    const model = getModel(apiKey, 'gemini-2.0-flash', eligibilitySchema);
     const profileStr = JSON.stringify(profile, null, 2);
     
     const prompt = `
@@ -141,7 +234,7 @@ ${schemesTextList.join('\n\n')}
 Determine eligibility, reasons, document requirements, and next steps. Output in structured JSON matching the schema.
     `;
 
-    const result = await model.generateContent(prompt);
+    const result = await withRetry(() => model.generateContent(prompt));
     const response = await result.response;
     return JSON.parse(response.text());
   },
@@ -170,7 +263,7 @@ Determine eligibility, reasons, document requirements, and next steps. Output in
       required: ["missing", "uploadedCount", "missingCount", "summary"]
     };
 
-    const model = getModel(apiKey, 'gemini-2.5-flash', missingDocsSchema);
+    const model = getModel(apiKey, 'gemini-2.0-flash', missingDocsSchema);
     const prompt = `
 For the scheme "${schemeName}", the required document types are:
 ${JSON.stringify(requiredDocs, null, 2)}
@@ -181,7 +274,7 @@ ${JSON.stringify(uploadedDocs, null, 2)}
 Match the uploaded files to the required document types. Detect which ones are missing, rate their importance, and provide a short summary of recommendations.
     `;
 
-    const result = await model.generateContent(prompt);
+    const result = await withRetry(() => model.generateContent(prompt));
     const response = await result.response;
     return JSON.parse(response.text());
   },
@@ -220,7 +313,7 @@ Match the uploaded files to the required document types. Detect which ones are m
       required: ["comparisonTable", "bestRecommendation"]
     };
 
-    const model = getModel(apiKey, 'gemini-2.5-flash', compareSchema);
+    const model = getModel(apiKey, 'gemini-2.0-flash', compareSchema);
     const prompt = `
 Compare the following loan offers/options:
 ${JSON.stringify(loansList, null, 2)}
@@ -228,7 +321,7 @@ ${JSON.stringify(loansList, null, 2)}
 Extract key parameters (interest rates, fees, periods, pros, cons) into a tabular structure and calculate the best recommendation. Output in JSON format.
     `;
 
-    const result = await model.generateContent(prompt);
+    const result = await withRetry(() => model.generateContent(prompt));
     const response = await result.response;
     return JSON.parse(response.text());
   }

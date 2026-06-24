@@ -31,7 +31,7 @@ router.get('/', async (req, res) => {
     try {
       // Make a minimal test call to Gemini
       const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
       await model.generateContent('Say "ok" in one word.');
       status.gemini.ok = true;
       status.gemini.message = '✅ API key is valid and working';

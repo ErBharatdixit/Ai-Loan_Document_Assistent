@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { withRetry } from './utils/withRetry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,7 +38,7 @@ function cosineSimilarity(vecA, vecB) {
 async function getEmbedding(text, apiKey) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: 'text-embedding-004' });
-  const result = await model.embedContent(text);
+  const result = await withRetry(() => model.embedContent(text));
   return result.embedding.values;
 }
 
@@ -54,11 +55,11 @@ async function getBatchEmbeddings(texts, apiKey) {
   for (let i = 0; i < texts.length; i += batchSize) {
     const batch = texts.slice(i, i + batchSize);
     try {
-      const response = await model.batchEmbedContents({
+      const response = await withRetry(() => model.batchEmbedContents({
         requests: batch.map(text => ({
           content: { parts: [{ text }] }
         }))
-      });
+      }));
       const batchEmbeddings = response.embeddings.map(e => e.values);
       allEmbeddings.push(...batchEmbeddings);
     } catch (error) {

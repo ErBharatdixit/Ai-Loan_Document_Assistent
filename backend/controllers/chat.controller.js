@@ -1,6 +1,24 @@
-import { Chat } from '../db.js';
+import { Chat, Document, Scheme } from '../db.js';
 import { vectorStore } from '../vectorStore.js';
 import { geminiService } from '../geminiService.js';
+
+// Fallback schemes
+const DEFAULT_SCHEMES = [
+  `--- SCHEME: Pradhan Mantri Mudra Yojana (PMMY) ---
+Description: Funding the unfunded. Loans up to 10 Lakhs for non-corporate, non-farm small/micro enterprises.
+Eligibility Criteria:
+- Age: 18 to 65 years
+- Business: Service, manufacturing, retail, or trading
+- Loan limit: Shishu (up to 50,000), Kishor (50k to 5L), Tarun (5L to 10L).`,
+
+  `--- SCHEME: Chief Minister Yuva Swarozgar Yojana (CMYSY) ---
+Description: Financial support for unemployed youth to set up service or industrial units.
+Eligibility Criteria:
+- Age: 18 to 40 years
+- Education: Minimum 10th Class (High School) pass
+- Business: Industrial sector (up to 25 Lakhs), Service sector (up to 10 Lakhs)
+- Residence: State resident.`
+];
 
 // POST /api/chat
 export const sendMessage = async (req, res) => {
@@ -20,9 +38,28 @@ export const sendMessage = async (req, res) => {
       .limit(10)
       .lean();
 
+    // Tools context buildup
+    const userDocs = await Document.find({ userId: req.user.id }).lean();
+    const uploadedDocs = userDocs.map(d => d.fileName);
+    
+    const dbSchemes = await Scheme.find().lean();
+    let schemeTexts = dbSchemes.length > 0 
+      ? dbSchemes.map(s => `--- SCHEME: ${s.name} ---\nDescription: ${s.description}\nEligibility Criteria: ${s.criteria.join('\n')}`)
+      : DEFAULT_SCHEMES;
+
+    const dbToolsContext = {
+      schemes: schemeTexts,
+      schemeDocsMap: {
+        "Pradhan Mantri Mudra Yojana (PMMY)": ["Aadhaar Card", "PAN Card", "Business Quotation or Project Report", "Proof of Business Address (Utility bill, GST registration)", "Bank Statement (Last 6 Months)"],
+        "Chief Minister Yuva Swarozgar Yojana (CMYSY)": ["Aadhaar Card", "10th Marksheet or Certificate", "Domicile Certificate", "Income Certificate", "Detailed Project Report (DPR)"],
+        "Stand-Up India Scheme": ["Aadhaar Card", "PAN Card", "SC/ST Category Certificate (if applicable)", "Project Report for Greenfield venture", "Company Incorporation / Partnership Deed"]
+      },
+      uploadedDocs: uploadedDocs
+    };
+
     // Step 3 — Send to Gemini with context
     const responseText = await geminiService.chatWithContext(
-      message, matches, lastTenChats.reverse(), language, req.geminiApiKey
+      message, matches, lastTenChats.reverse(), language, req.geminiApiKey, dbToolsContext
     );
 
     // Step 4 — Save this exchange in MongoDB
