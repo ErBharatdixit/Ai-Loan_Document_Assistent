@@ -17,7 +17,14 @@ await connectDB();
 const app = express();
 
 // --- Global Middleware ---
-app.use(cors());
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://ai-loan-document-assistent-1.onrender.com'
+  ],
+  credentials: true
+}));
 app.use(express.json());
 
 // Serve uploaded files as static assets

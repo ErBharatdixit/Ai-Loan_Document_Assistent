@@ -1,9 +1,11 @@
 import axios from 'axios';
 
 // Create custom Axios instance
+// In development, Vite proxy handles /api -> localhost:5000
+// In production, VITE_API_URL points to the deployed backend
 const api = axios.create({
-  baseURL: '', // Empty base URL since Vite proxies requests to the backend
-  timeout: 60000 // 60 seconds (useful for file processing & AI generation)
+  baseURL: import.meta.env.VITE_API_URL || '',
+  timeout: 120000 // 120 seconds (Render free tier can take 30-60s to wake up)
 });
 
 // Request interceptor to attach JWT token and custom Gemini Key
